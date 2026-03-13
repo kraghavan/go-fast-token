@@ -436,4 +436,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Credits
 
 Built on top of [tiktoken-go](https://github.com/pkoukk/tiktoken-go) for BPE encoding.
-
