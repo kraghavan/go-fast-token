@@ -14,6 +14,9 @@ Fast, parallel tokenizer for LLM inference pipelines in Go.
 - ✂️ **Context Window Management** — Truncate to exact token count without re-tokenization
 - 🔧 **Zero-Copy Design** — Uses `[]byte` throughout to minimize allocations
 - ⚡ **Indexed Parallelism** — Lock-free result collection via pre-allocated slices
+- Here is an infographic poster
+![How the Fast-Token Factory Works](./assets/factory-infographic.png)
+
 
 ## Installation
 
