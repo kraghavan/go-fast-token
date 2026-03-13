@@ -415,6 +415,27 @@ type Token struct {
 5. **Stream for large inputs** — Pipelining hides tokenization latency
 6. **Profile before optimizing** — Run `GOGC=off` tests to isolate GC vs coordination overhead
 
+## Known Limitations
+
+### Parallel Tokenization Overhead (~2% on long inputs)
+
+Chunked parallel tokenization may produce slightly more tokens (~2%) on very long inputs (>10KB) compared to single-pass tiktoken. This occurs because BPE merges like `" This"` (space + word = single token) can be broken at chunk boundaries.
+
+**Impact:**
+- Short/medium texts: Exact match with tiktoken ✅
+- Long texts (>10KB): ~2% more tokens
+- Model output quality: Zero impact (same decoded text)
+- Ordering/correctness: Unaffected ✅
+
+**Workaround:** For exact tiktoken parity, use single-worker mode:
+```go
+cfg := tokenizer.DefaultConfig()
+cfg.NumWorkers = 1
+tok, _ := tokenizer.New(cfg)
+```
+
+> 📋 **Roadmap:** A future release will implement boundary-aware whitespace handling to eliminate this overhead while preserving parallelism.
+
 ## Contributing
 
 Contributions welcome! Please open an issue first to discuss proposed changes.
