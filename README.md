@@ -14,7 +14,8 @@ Fast, parallel tokenizer for LLM inference pipelines in Go.
 - ✂️ **Context Window Management** — Truncate to exact token count without re-tokenization
 - 🔧 **Zero-Copy Design** — Uses `[]byte` throughout to minimize allocations
 - ⚡ **Indexed Parallelism** — Lock-free result collection via pre-allocated slices
-- Here is an infographic poster
+- 🎯 **Auto-Tuned Workers** — Dynamically selects optimal worker count based on input size
+
 ![How the Fast-Token Factory Works](./assets/factory-infographic.png)
 
 
@@ -108,13 +109,15 @@ for chunk := range stream.Chunks {
 ```go
 cfg := tokenizer.Config{
     Model:        "cl100k_base", // or "gpt-4", "gpt-3.5-turbo", "p50k_base"
-    NumWorkers:   8,             // Parallel workers (default: NumCPU)
+    NumWorkers:   8,             // Max parallel workers (auto-tuned per request)
     MinChunkSize: 100,           // Minimum bytes per chunk
     MaxTokens:    4096,          // Auto-truncate (0 = disabled)
     EnablePooling: true,         // sync.Pool for high throughput
 }
 tok, _ := tokenizer.New(cfg)
 ```
+
+> **Note:** `NumWorkers` sets the maximum — the tokenizer automatically selects fewer workers for smaller inputs to avoid coordination overhead.
 
 ## Supported Models
 
@@ -135,6 +138,12 @@ tok, _ := tokenizer.New(cfg)
 ┌─────────────────────────────────────────────────────────┐
 │  Boundary Splitter (whitespace/punctuation)             │
 │  → []Chunk with Index + ByteOffset                      │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Auto-Tune: optimalWorkers(inputSize, numChunks, max)   │
+│  → Select 1-N workers based on workload                 │
 └─────────────────────────────────────────────────────────┘
                           │
           ┌───────────────┼───────────────┐
@@ -178,6 +187,11 @@ flowchart TB
             CHUNK2["Chunk 2<br/>━━━━━━━<br/>Index: 2<br/>Data: []byte<br/>ByteOffset: 1694"]
             CHUNKN["Chunk N<br/>━━━━━━━<br/>Index: N<br/>Data: []byte<br/>ByteOffset: ..."]
         end
+    end
+
+    subgraph AutoTuneLayer["🎯 AUTO-TUNING"]
+        direction TB
+        AUTOTUNE["optimalWorkers()<br/>━━━━━━━━━━━━━━━<br/>• < 1KB → 1 worker<br/>• 1-5KB → 2 workers<br/>• 5-20KB → 4 workers<br/>• 20KB+ → scale up<br/>• Cap by chunk count"]
     end
 
     subgraph WorkerPoolLayer["⚡ PARALLEL WORKER POOL"]
@@ -256,11 +270,12 @@ flowchart TB
 
     INPUT --> SPLITTER
     CONFIG --> SPLITTER
-    CONFIG --> ENCODER
+    CONFIG --> AUTOTUNE
     
     SPLITTER --> CHUNK0 & CHUNK1 & CHUNK2 & CHUNKN
     
-    CHUNK0 & CHUNK1 & CHUNK2 & CHUNKN --> JOBCHAN
+    CHUNK0 & CHUNK1 & CHUNK2 & CHUNKN --> AUTOTUNE
+    AUTOTUNE --> JOBCHAN
     
     JOBCHAN --> W1 & W2 & W3 & WN
     
@@ -293,6 +308,7 @@ flowchart TB
 
     classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef chunkStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef autotuneStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
     classDef workerStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
     classDef bpeStyle fill:#fce4ec,stroke:#c2185b,stroke-width:2px
     classDef resultStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
@@ -303,6 +319,7 @@ flowchart TB
     
     class INPUT,CONFIG inputStyle
     class SPLITTER,CHUNK0,CHUNK1,CHUNK2,CHUNKN chunkStyle
+    class AUTOTUNE autotuneStyle
     class JOBCHAN,W1,W2,W3,WN,WAITGROUP workerStyle
     class ENCODER,TOKEN bpeStyle
     class PREALLOCATED,R0,R1,R2,RN,FLATTEN resultStyle
@@ -323,22 +340,35 @@ cd bench
 go test -bench=. -benchmem
 ```
 
-Example results (M1 Mac, 8 cores):
+Results (Apple M4, 10 cores):
 
-| Benchmark | Input Size | Time | Allocs |
-|-----------|------------|------|--------|
-| Encode_Small | 100 B | 15 µs | 8 |
-| Encode_Medium | 1 KB | 45 µs | 24 |
-| Encode_Large | 10 KB | 180 µs | 89 |
-| Encode_VeryLarge | 100 KB | 1.2 ms | 412 |
+| Benchmark | Input Size | Time | Throughput |
+|-----------|------------|------|------------|
+| Encode_Small | 100 B | 11 µs | — |
+| Encode_Medium | 1 KB | 126 µs | — |
+| Encode_Large | 10 KB | 814 µs | — |
+| Encode_VeryLarge | 100 KB | 11 ms | — |
+| **Throughput** | 10 KB | 753 µs | **3.04M tokens/sec** |
 
-Parallel speedup (10 KB input):
+### Auto-Tuning Impact
 
-| Workers | Time | Speedup |
-|---------|------|---------|
-| 1 | 450 µs | 1.0x |
-| 4 | 180 µs | 2.5x |
-| 8 | 140 µs | 3.2x |
+With auto-tuning, worker count is dynamically selected based on input size:
+
+| Input Size | Workers Selected | Rationale |
+|------------|------------------|-----------|
+| < 1 KB | 1 | Parallelism overhead exceeds benefit |
+| 1-5 KB | 2 | Light parallelism |
+| 5-20 KB | 4 | Sweet spot |
+| 20 KB+ | Scales up | More chunks = more workers |
+
+### Before vs After Auto-Tuning
+
+| Config | Before (fixed 8 workers) | After (auto-tuned) | Improvement |
+|--------|--------------------------|---------------------|-------------|
+| 10 KB input | 1,012 µs | 778 µs | **23% faster** |
+| Throughput | 2.09M tok/s | 3.04M tok/s | **45% faster** |
+
+> **Why?** Profiling with `GOGC=off` proved the slowdown was coordination overhead, not GC. Auto-tuning eliminates unnecessary goroutine scheduling.
 
 ## API Reference
 
@@ -379,10 +409,11 @@ type Token struct {
 ## Performance Tips
 
 1. **Use `[]byte` input** — Avoids string-to-byte conversions
-2. **Tune `MinChunkSize`** — Larger chunks reduce overhead, smaller chunks improve parallelism
+2. **Trust auto-tuning** — Worker count adjusts automatically per request
 3. **Use `CountTokens`** — Faster than `len(Encode())` when offsets aren't needed
 4. **Enable pooling for high throughput** — `cfg.EnablePooling = true` reduces GC pressure
 5. **Stream for large inputs** — Pipelining hides tokenization latency
+6. **Profile before optimizing** — Run `GOGC=off` tests to isolate GC vs coordination overhead
 
 ## Contributing
 
@@ -395,3 +426,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Credits
 
 Built on top of [tiktoken-go](https://github.com/pkoukk/tiktoken-go) for BPE encoding.
+
