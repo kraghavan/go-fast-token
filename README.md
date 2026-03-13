@@ -18,7 +18,6 @@ Fast, parallel tokenizer for LLM inference pipelines in Go.
 
 ![How the Fast-Token Factory Works](./assets/factory-infographic3.png)
 
-
 ## Installation
 
 ```bash
@@ -108,7 +107,7 @@ for chunk := range stream.Chunks {
 
 ```go
 cfg := tokenizer.Config{
-    Model:        "cl100k_base", // or "gpt-4", "gpt-3.5-turbo", "p50k_base"
+    Model:        "cl100k_base", // or "o200k_base", "gpt-4o", "p50k_base"
     NumWorkers:   8,             // Max parallel workers (auto-tuned per request)
     MinChunkSize: 100,           // Minimum bytes per chunk
     MaxTokens:    4096,          // Auto-truncate (0 = disabled)
@@ -127,6 +126,7 @@ tok, _ := tokenizer.New(cfg)
 | `cl100k_base` | BPE | GPT-4, GPT-4-turbo, GPT-3.5-turbo, text-embedding-ada-002 |
 | `p50k_base` | BPE | Codex, text-davinci-002/003 |
 | `r50k_base` | BPE | GPT-3 (davinci, curie, etc.) |
+
 ```go
 // GPT-4o (recommended for new projects)
 cfg := tokenizer.DefaultConfig()
@@ -135,6 +135,7 @@ tok, _ := tokenizer.New(cfg)
 
 // Or use model name directly
 tok, _ := tokenizer.NewWithModel("gpt-4o")
+```
 
 ## Architecture
 
@@ -220,7 +221,7 @@ flowchart TB
 
     subgraph BPELayer["🧠 BPE ENCODING (tiktoken-go)"]
         direction TB
-        ENCODER["internal/bpe/Encoder<br/>━━━━━━━━━━━━━━━<br/>• Wraps tiktoken-go<br/>• Adds offset tracking<br/>• Optional sync.Pool<br/>• Supports cl100k, p50k, r50k"]
+        ENCODER["internal/bpe/Encoder<br/>━━━━━━━━━━━━━━━<br/>• Wraps tiktoken-go<br/>• Adds offset tracking<br/>• Optional sync.Pool<br/>• Supports cl100k, p50k, r50k, o200k"]
         
         subgraph TokenOutput["Token Structure"]
             TOKEN["Token{}<br/>━━━━━━━━━━━━━━━<br/>• ID: int (vocab ID)<br/>• StartByte: int<br/>• EndByte: int"]
