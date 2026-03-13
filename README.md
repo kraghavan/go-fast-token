@@ -16,7 +16,7 @@ Fast, parallel tokenizer for LLM inference pipelines in Go.
 - ⚡ **Indexed Parallelism** — Lock-free result collection via pre-allocated slices
 - 🎯 **Auto-Tuned Workers** — Dynamically selects optimal worker count based on input size
 
-![How the Fast-Token Factory Works](./assets/factory-infographic.png)
+![How the Fast-Token Factory Works](./assets/factory-infographic2.png)
 
 
 ## Installation
