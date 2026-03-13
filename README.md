@@ -152,78 +152,11 @@ tok, _ := tokenizer.New(cfg)
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Benchmarks
-
-Run benchmarks:
-
-```bash
-cd bench
-go test -bench=. -benchmem
-```
-
-Example results (M1 Mac, 8 cores):
-
-| Benchmark | Input Size | Time | Allocs |
-|-----------|------------|------|--------|
-| Encode_Small | 100 B | 15 µs | 8 |
-| Encode_Medium | 1 KB | 45 µs | 24 |
-| Encode_Large | 10 KB | 180 µs | 89 |
-| Encode_VeryLarge | 100 KB | 1.2 ms | 412 |
-
-Parallel speedup (10 KB input):
-
-| Workers | Time | Speedup |
-|---------|------|---------|
-| 1 | 450 µs | 1.0x |
-| 4 | 180 µs | 2.5x |
-| 8 | 140 µs | 3.2x |
-
-## API Reference
-
-### Tokenizer Interface
-
-```go
-type Tokenizer interface {
-    // Encode with byte offset tracking
-    Encode(input []byte) ([]Token, error)
-    
-    // Encode returning only IDs (faster when offsets not needed)
-    EncodeIDs(input []byte) ([]int, error)
-    
-    // Streaming encode for pipeline integration
-    StreamEncode(ctx context.Context, input []byte) *TokenStream
-    
-    // Decode IDs back to bytes
-    Decode(ids []int) ([]byte, error)
-    
-    // Find truncation point for context window
-    TruncateToFit(input []byte, maxTokens int) (cutoffByte, tokenCount int, err error)
-    
-    // Fast token counting
-    CountTokens(input []byte) (int, error)
-}
-```
-
-### Token Type
-
-```go
-type Token struct {
-    ID        int // Vocabulary ID
-    StartByte int // Start position in input
-    EndByte   int // End position (exclusive)
-}
-```
-
-## Architecture
-
 <details>
 <summary>Click to expand full architecture diagram</summary>
+
 ```mermaid
 flowchart TB
-    %% ============================================
-    %% GO-FAST-TOKEN ARCHITECTURE
-    %% Parallel Tokenizer for LLM Inference Pipelines
-    %% ============================================
 
     subgraph InputLayer["📥 INPUT LAYER"]
         direction TB
@@ -318,10 +251,6 @@ flowchart TB
         UC4["📏 Context Management<br/>Fit prompts to model limits"]
     end
 
-    %% ============================================
-    %% CONNECTIONS
-    %% ============================================
-    
     INPUT --> SPLITTER
     CONFIG --> SPLITTER
     CONFIG --> ENCODER
@@ -359,10 +288,6 @@ flowchart TB
     
     ENCODE & STREAMENCODE --> UC1 & UC2 & UC3 & UC4
 
-    %% ============================================
-    %% STYLING
-    %% ============================================
-    
     classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef chunkStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
     classDef workerStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
@@ -386,6 +311,67 @@ flowchart TB
 
 </details>
 
+## Benchmarks
+
+Run benchmarks:
+
+```bash
+cd bench
+go test -bench=. -benchmem
+```
+
+Example results (M1 Mac, 8 cores):
+
+| Benchmark | Input Size | Time | Allocs |
+|-----------|------------|------|--------|
+| Encode_Small | 100 B | 15 µs | 8 |
+| Encode_Medium | 1 KB | 45 µs | 24 |
+| Encode_Large | 10 KB | 180 µs | 89 |
+| Encode_VeryLarge | 100 KB | 1.2 ms | 412 |
+
+Parallel speedup (10 KB input):
+
+| Workers | Time | Speedup |
+|---------|------|---------|
+| 1 | 450 µs | 1.0x |
+| 4 | 180 µs | 2.5x |
+| 8 | 140 µs | 3.2x |
+
+## API Reference
+
+### Tokenizer Interface
+
+```go
+type Tokenizer interface {
+    // Encode with byte offset tracking
+    Encode(input []byte) ([]Token, error)
+    
+    // Encode returning only IDs (faster when offsets not needed)
+    EncodeIDs(input []byte) ([]int, error)
+    
+    // Streaming encode for pipeline integration
+    StreamEncode(ctx context.Context, input []byte) *TokenStream
+    
+    // Decode IDs back to bytes
+    Decode(ids []int) ([]byte, error)
+    
+    // Find truncation point for context window
+    TruncateToFit(input []byte, maxTokens int) (cutoffByte, tokenCount int, err error)
+    
+    // Fast token counting
+    CountTokens(input []byte) (int, error)
+}
+```
+
+### Token Type
+
+```go
+type Token struct {
+    ID        int // Vocabulary ID
+    StartByte int // Start position in input
+    EndByte   int // End position (exclusive)
+}
+```
 
 ## Performance Tips
 
