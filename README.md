@@ -214,6 +214,179 @@ type Token struct {
 }
 ```
 
+## Architecture
+
+<details>
+<summary>Click to expand full architecture diagram</summary>
+```mermaid
+flowchart TB
+    %% ============================================
+    %% GO-FAST-TOKEN ARCHITECTURE
+    %% Parallel Tokenizer for LLM Inference Pipelines
+    %% ============================================
+
+    subgraph InputLayer["📥 INPUT LAYER"]
+        direction TB
+        INPUT[/"Raw Input []byte<br/>━━━━━━━━━━━━━━━<br/>• Zero-copy design<br/>• No string conversion<br/>• Preserves byte positions"/]
+        CONFIG["⚙️ Config<br/>━━━━━━━━━━━━━━━<br/>• Model: cl100k_base<br/>• NumWorkers: runtime.NumCPU()<br/>• MinChunkSize: 100 bytes<br/>• MaxTokens: context limit<br/>• EnablePooling: sync.Pool"]
+    end
+
+    subgraph ChunkingLayer["✂️ BOUNDARY-AWARE CHUNKING"]
+        direction TB
+        SPLITTER["SplitByBoundary()<br/>━━━━━━━━━━━━━━━<br/>• Splits on whitespace/punctuation<br/>• Never cuts mid-word<br/>• Tracks ByteOffset per chunk<br/>• Merges micro-chunks"]
+        
+        subgraph Chunks["Generated Chunks"]
+            direction LR
+            CHUNK0["Chunk 0<br/>━━━━━━━<br/>Index: 0<br/>Data: []byte<br/>ByteOffset: 0"]
+            CHUNK1["Chunk 1<br/>━━━━━━━<br/>Index: 1<br/>Data: []byte<br/>ByteOffset: 847"]
+            CHUNK2["Chunk 2<br/>━━━━━━━<br/>Index: 2<br/>Data: []byte<br/>ByteOffset: 1694"]
+            CHUNKN["Chunk N<br/>━━━━━━━<br/>Index: N<br/>Data: []byte<br/>ByteOffset: ..."]
+        end
+    end
+
+    subgraph WorkerPoolLayer["⚡ PARALLEL WORKER POOL"]
+        direction TB
+        JOBCHAN[("Buffered Job Channel<br/>chan Chunk")]
+        
+        subgraph Workers["Goroutine Workers"]
+            direction LR
+            W1["🔧 Worker 1<br/>━━━━━━━━━<br/>• Pull from channel<br/>• BPE encode chunk<br/>• Track byte offsets<br/>• Write to results[idx]"]
+            W2["🔧 Worker 2<br/>━━━━━━━━━<br/>• Pull from channel<br/>• BPE encode chunk<br/>• Track byte offsets<br/>• Write to results[idx]"]
+            W3["🔧 Worker 3<br/>━━━━━━━━━<br/>• Pull from channel<br/>• BPE encode chunk<br/>• Track byte offsets<br/>• Write to results[idx]"]
+            WN["🔧 Worker N<br/>━━━━━━━━━<br/>• Pull from channel<br/>• BPE encode chunk<br/>• Track byte offsets<br/>• Write to results[idx]"]
+        end
+
+        WAITGROUP["sync.WaitGroup<br/>━━━━━━━━━━━━━━━<br/>Synchronization barrier"]
+    end
+
+    subgraph BPELayer["🧠 BPE ENCODING (tiktoken-go)"]
+        direction TB
+        ENCODER["internal/bpe/Encoder<br/>━━━━━━━━━━━━━━━<br/>• Wraps tiktoken-go<br/>• Adds offset tracking<br/>• Optional sync.Pool<br/>• Supports cl100k, p50k, r50k"]
+        
+        subgraph TokenOutput["Token Structure"]
+            TOKEN["Token{}<br/>━━━━━━━━━━━━━━━<br/>• ID: int (vocab ID)<br/>• StartByte: int<br/>• EndByte: int"]
+        end
+    end
+
+    subgraph ResultsLayer["📦 LOCK-FREE RESULT COLLECTION"]
+        direction TB
+        PREALLOCATED["Pre-allocated Results Slice<br/>results := make([][]Token, numChunks)<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• Each worker owns its index<br/>• No mutex required<br/>• Direct indexed writes<br/>• Zero contention"]
+        
+        subgraph ResultSlots["Indexed Slots"]
+            direction LR
+            R0["results[0]<br/>[]Token"]
+            R1["results[1]<br/>[]Token"]
+            R2["results[2]<br/>[]Token"]
+            RN["results[N]<br/>[]Token"]
+        end
+
+        FLATTEN["flattenResults()<br/>━━━━━━━━━━━━━━━<br/>Concatenate in order → []Token"]
+    end
+
+    subgraph OutputModes["📤 OUTPUT MODES"]
+        direction TB
+        
+        subgraph BatchMode["Batch Mode"]
+            ENCODE["Encode(input []byte) → []Token<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• Blocks until complete<br/>• Returns ordered tokens<br/>• Full byte offset tracking"]
+            ENCODEIDS["EncodeIDs(input []byte) → []int<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• IDs only (faster)<br/>• No offset overhead"]
+        end
+
+        subgraph StreamMode["Streaming Mode"]
+            STREAMENCODE["StreamEncode(ctx, input) → *TokenStream<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• Returns immediately<br/>• Chunks arrive via channel<br/>• May be out of order<br/>• Context cancellation support"]
+            TOKENSTREAM["TokenStream{}<br/>━━━━━━━━━━━━━━━<br/>• Chunks: chan ChunkResult<br/>• Done(): completion signal<br/>• Err(): error access<br/>• Wait(): blocking wait"]
+        end
+    end
+
+    subgraph StreamUtilities["📡 STREAMING UTILITIES"]
+        direction TB
+        ORDERED["OrderedStreamReader<br/>━━━━━━━━━━━━━━━━━━━━<br/>• Buffers out-of-order chunks<br/>• Emits in sequence order<br/>• For ordered prefill"]
+        COLLECTOR["StreamCollector<br/>━━━━━━━━━━━━━━━━━━━━<br/>• Thread-safe accumulator<br/>• Reorders on completion<br/>• Returns sorted []Token"]
+        PREFILL["StreamToPrefill(callback)<br/>━━━━━━━━━━━━━━━━━━━━<br/>• Ordered chunk delivery<br/>• Direct inference integration<br/>• isFinal flag for last chunk"]
+    end
+
+    subgraph TruncationLayer["✂️ CONTEXT WINDOW MANAGEMENT"]
+        direction TB
+        TRUNCFIT["TruncateToFit(input, maxTokens)<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• Returns (cutoffByte, tokenCount)<br/>• Precise byte position<br/>• No re-tokenization needed"]
+        CUMULATIVE["CumulativeTruncation{}<br/>━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br/>• ProcessChunk() → running count<br/>• Early exit when limit found<br/>• Streaming-compatible<br/>• Saves compute on long inputs"]
+    end
+
+    subgraph UseCases["🎯 USE CASES"]
+        direction TB
+        UC1["🚀 LLM Inference Prefill<br/>Pipeline tokenization with inference"]
+        UC2["📊 Batch Processing<br/>High-throughput dataset tokenization"]
+        UC3["🎯 RAG Chunking<br/>Precise document splitting"]
+        UC4["📏 Context Management<br/>Fit prompts to model limits"]
+    end
+
+    %% ============================================
+    %% CONNECTIONS
+    %% ============================================
+    
+    INPUT --> SPLITTER
+    CONFIG --> SPLITTER
+    CONFIG --> ENCODER
+    
+    SPLITTER --> CHUNK0 & CHUNK1 & CHUNK2 & CHUNKN
+    
+    CHUNK0 & CHUNK1 & CHUNK2 & CHUNKN --> JOBCHAN
+    
+    JOBCHAN --> W1 & W2 & W3 & WN
+    
+    W1 & W2 & W3 & WN --> ENCODER
+    ENCODER --> TOKEN
+    
+    W1 -->|"results[0]"| R0
+    W2 -->|"results[1]"| R1
+    W3 -->|"results[2]"| R2
+    WN -->|"results[N]"| RN
+    
+    W1 & W2 & W3 & WN --> WAITGROUP
+    
+    R0 & R1 & R2 & RN --> FLATTEN
+    
+    FLATTEN --> ENCODE
+    FLATTEN --> ENCODEIDS
+    
+    JOBCHAN -.->|"Streaming path"| STREAMENCODE
+    STREAMENCODE --> TOKENSTREAM
+    
+    TOKENSTREAM --> ORDERED
+    TOKENSTREAM --> COLLECTOR
+    ORDERED --> PREFILL
+    
+    ENCODE --> TRUNCFIT
+    TOKENSTREAM --> CUMULATIVE
+    
+    ENCODE & STREAMENCODE --> UC1 & UC2 & UC3 & UC4
+
+    %% ============================================
+    %% STYLING
+    %% ============================================
+    
+    classDef inputStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef chunkStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef workerStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef bpeStyle fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef resultStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef outputStyle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef streamStyle fill:#fff8e1,stroke:#f9a825,stroke-width:2px
+    classDef truncStyle fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef usecaseStyle fill:#f1f8e9,stroke:#558b2f,stroke-width:2px
+    
+    class INPUT,CONFIG inputStyle
+    class SPLITTER,CHUNK0,CHUNK1,CHUNK2,CHUNKN chunkStyle
+    class JOBCHAN,W1,W2,W3,WN,WAITGROUP workerStyle
+    class ENCODER,TOKEN bpeStyle
+    class PREALLOCATED,R0,R1,R2,RN,FLATTEN resultStyle
+    class ENCODE,ENCODEIDS,STREAMENCODE,TOKENSTREAM outputStyle
+    class ORDERED,COLLECTOR,PREFILL streamStyle
+    class TRUNCFIT,CUMULATIVE truncStyle
+    class UC1,UC2,UC3,UC4 usecaseStyle
+```
+
+</details>
+
+
 ## Performance Tips
 
 1. **Use `[]byte` input** — Avoids string-to-byte conversions
