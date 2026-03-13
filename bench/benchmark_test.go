@@ -1,9 +1,11 @@
-package tokenizer
+package bench
 
 import (
 	"context"
 	"strings"
 	"testing"
+
+	tokenizer "github.com/kraghavan/go-fast-token"
 )
 
 // generateText creates test input of approximately the given size
@@ -15,7 +17,7 @@ func generateText(size int) []byte {
 }
 
 func BenchmarkEncode_Small(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(100) // ~25 tokens
 
 	b.ResetTimer()
@@ -27,7 +29,7 @@ func BenchmarkEncode_Small(b *testing.B) {
 }
 
 func BenchmarkEncode_Medium(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(1000) // ~250 tokens
 
 	b.ResetTimer()
@@ -39,7 +41,7 @@ func BenchmarkEncode_Medium(b *testing.B) {
 }
 
 func BenchmarkEncode_Large(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(10000) // ~2500 tokens
 
 	b.ResetTimer()
@@ -51,7 +53,7 @@ func BenchmarkEncode_Large(b *testing.B) {
 }
 
 func BenchmarkEncode_VeryLarge(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(100000) // ~25000 tokens
 
 	b.ResetTimer()
@@ -63,7 +65,7 @@ func BenchmarkEncode_VeryLarge(b *testing.B) {
 }
 
 func BenchmarkEncodeIDs_Large(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(10000)
 
 	b.ResetTimer()
@@ -75,7 +77,7 @@ func BenchmarkEncodeIDs_Large(b *testing.B) {
 }
 
 func BenchmarkCountTokens_Large(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(10000)
 
 	b.ResetTimer()
@@ -88,9 +90,9 @@ func BenchmarkCountTokens_Large(b *testing.B) {
 
 // Compare parallel vs single worker
 func BenchmarkEncode_SingleWorker(b *testing.B) {
-	cfg := DefaultConfig()
+	cfg := tokenizer.DefaultConfig()
 	cfg.NumWorkers = 1
-	tok, _ := New(cfg)
+	tok, _ := tokenizer.New(cfg)
 	input := generateText(10000)
 
 	b.ResetTimer()
@@ -102,9 +104,9 @@ func BenchmarkEncode_SingleWorker(b *testing.B) {
 }
 
 func BenchmarkEncode_4Workers(b *testing.B) {
-	cfg := DefaultConfig()
+	cfg := tokenizer.DefaultConfig()
 	cfg.NumWorkers = 4
-	tok, _ := New(cfg)
+	tok, _ := tokenizer.New(cfg)
 	input := generateText(10000)
 
 	b.ResetTimer()
@@ -116,9 +118,9 @@ func BenchmarkEncode_4Workers(b *testing.B) {
 }
 
 func BenchmarkEncode_8Workers(b *testing.B) {
-	cfg := DefaultConfig()
+	cfg := tokenizer.DefaultConfig()
 	cfg.NumWorkers = 8
-	tok, _ := New(cfg)
+	tok, _ := tokenizer.New(cfg)
 	input := generateText(10000)
 
 	b.ResetTimer()
@@ -130,7 +132,7 @@ func BenchmarkEncode_8Workers(b *testing.B) {
 }
 
 func BenchmarkStreamEncode_Large(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(10000)
 	ctx := context.Background()
 
@@ -147,7 +149,7 @@ func BenchmarkStreamEncode_Large(b *testing.B) {
 }
 
 func BenchmarkTruncateToFit(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(10000)
 	maxTokens := 1000
 
@@ -167,15 +169,15 @@ func BenchmarkSplitByBoundary(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = SplitByBoundary(input, minChunkSize)
+		_ = tokenizer.SplitByBoundary(input, minChunkSize)
 	}
 }
 
 // Memory efficiency test
 func BenchmarkEncode_MemoryEfficiency(b *testing.B) {
-	cfg := DefaultConfig()
+	cfg := tokenizer.DefaultConfig()
 	cfg.EnablePooling = true
-	tok, _ := New(cfg)
+	tok, _ := tokenizer.New(cfg)
 	input := generateText(10000)
 
 	b.ResetTimer()
@@ -188,7 +190,7 @@ func BenchmarkEncode_MemoryEfficiency(b *testing.B) {
 
 // Throughput test - tokens per second
 func BenchmarkThroughput(b *testing.B) {
-	tok, _ := New(DefaultConfig())
+	tok, _ := tokenizer.New(tokenizer.DefaultConfig())
 	input := generateText(10000)
 
 	var totalTokens int

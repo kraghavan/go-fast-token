@@ -11,7 +11,6 @@ import (
 type tokenizer struct {
 	cfg     Config
 	encoder *bpe.Encoder
-	pool    *workerPool
 }
 
 // New creates a new parallel tokenizer with the given configuration.
@@ -36,7 +35,6 @@ func New(cfg Config) (Tokenizer, error) {
 	return &tokenizer{
 		cfg:     cfg,
 		encoder: encoder,
-		pool:    newWorkerPool(cfg.NumWorkers, encoder),
 	}, nil
 }
 
@@ -61,9 +59,15 @@ func (t *tokenizer) Encode(input []byte) ([]Token, error) {
 	// Split into chunks at natural boundaries
 	chunks := SplitByBoundary(input, t.cfg.MinChunkSize)
 
+	// Auto-tune worker count based on input size and chunks
+	numWorkers := optimalWorkers(len(input), len(chunks), t.cfg.NumWorkers)
+
+	// Create pool with optimal worker count
+	pool := newWorkerPool(numWorkers, t.encoder)
+
 	// Process in parallel
 	ctx := context.Background()
-	results, err := t.pool.processChunks(ctx, chunks)
+	results, err := pool.processChunks(ctx, chunks)
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +147,14 @@ func (t *tokenizer) StreamEncode(ctx context.Context, input []byte) *TokenStream
 	// Split into chunks
 	chunks := SplitByBoundary(input, t.cfg.MinChunkSize)
 
+	// Auto-tune worker count
+	numWorkers := optimalWorkers(len(input), len(chunks), t.cfg.NumWorkers)
+
+	// Create pool with optimal worker count
+	pool := newWorkerPool(numWorkers, t.encoder)
+
 	// Start streaming processing
-	resultChan := t.pool.processChunksStreaming(ctx, chunks)
+	resultChan := pool.processChunksStreaming(ctx, chunks)
 
 	// Create wrapper that tracks completion
 	wrappedChan := make(chan ChunkResult, len(chunks))
@@ -240,7 +250,12 @@ func (t *tokenizer) EncodeWithContext(ctx context.Context, input []byte) ([]Toke
 
 	// Split and process with context
 	chunks := SplitByBoundary(input, t.cfg.MinChunkSize)
-	results, err := t.pool.processChunks(ctx, chunks)
+
+	// Auto-tune worker count
+	numWorkers := optimalWorkers(len(input), len(chunks), t.cfg.NumWorkers)
+	pool := newWorkerPool(numWorkers, t.encoder)
+
+	results, err := pool.processChunks(ctx, chunks)
 	if err != nil {
 		return nil, err
 	}
@@ -297,4 +312,48 @@ func assembleResults(results []ChunkResult) ([]Token, error) {
 // GetConfig returns the current configuration.
 func (t *tokenizer) GetConfig() Config {
 	return t.cfg
+}
+
+// optimalWorkers calculates the best worker count based on input size and chunks.
+// Based on benchmark findings: 4 workers is optimal for 10KB, more workers adds overhead.
+func optimalWorkers(inputSize int, numChunks int, maxWorkers int) int {
+	// Heuristic based on benchmarks:
+	// - Below 1KB: single-threaded is faster (no coordination overhead)
+	// - 1-5KB: 2 workers
+	// - 5-20KB: 4 workers (sweet spot)
+	// - 20KB+: scale up, but cap at maxWorkers
+
+	if inputSize < 1024 {
+		return 1
+	}
+	if inputSize < 5*1024 {
+		return minInt(2, maxWorkers)
+	}
+	if inputSize < 20*1024 {
+		return minInt(4, maxWorkers)
+	}
+
+	// For larger inputs, scale with size but cap
+	// Roughly 1 worker per 5KB, max out at configured limit
+	workers := inputSize / (5 * 1024)
+	if workers < 4 {
+		workers = 4
+	}
+	if workers > maxWorkers {
+		workers = maxWorkers
+	}
+
+	// Also cap by chunk count — no point having more workers than chunks
+	if workers > numChunks {
+		workers = numChunks
+	}
+
+	return workers
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
