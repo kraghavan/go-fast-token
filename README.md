@@ -123,9 +123,18 @@ tok, _ := tokenizer.New(cfg)
 
 | Model | Encoding | Used By |
 |-------|----------|---------|
-| `cl100k_base` | BPE | GPT-4, GPT-3.5-turbo, text-embedding-ada-002 |
+| `o200k_base` | BPE | GPT-4o, GPT-4o-mini, o1, o3, o4-mini |
+| `cl100k_base` | BPE | GPT-4, GPT-4-turbo, GPT-3.5-turbo, text-embedding-ada-002 |
 | `p50k_base` | BPE | Codex, text-davinci-002/003 |
 | `r50k_base` | BPE | GPT-3 (davinci, curie, etc.) |
+```go
+// GPT-4o (recommended for new projects)
+cfg := tokenizer.DefaultConfig()
+cfg.Model = "o200k_base"
+tok, _ := tokenizer.New(cfg)
+
+// Or use model name directly
+tok, _ := tokenizer.NewWithModel("gpt-4o")
 
 ## Architecture
 

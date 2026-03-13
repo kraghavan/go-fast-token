@@ -8,6 +8,9 @@ import (
 // boundaryChars defines safe split points (whitespace + common punctuation)
 var boundaryChars = []byte(" \t\n\r.,;:!?")
 
+// whitespaceChars for special handling
+var whitespaceChars = []byte(" \t\n\r")
+
 // SplitByBoundary divides input into chunks at natural boundaries.
 // This avoids splitting mid-token which would corrupt BPE encoding.
 //
@@ -16,6 +19,9 @@ var boundaryChars = []byte(" \t\n\r.,;:!?")
 //  2. Accumulate bytes until minChunkSize is reached
 //  3. Split at the next boundary after minChunkSize
 //  4. Track byte offsets for each chunk
+//
+// IMPORTANT: Whitespace is kept with the FOLLOWING word, not the preceding one.
+// This preserves BPE merges like " This" which are single tokens.
 //
 // Uses []byte throughout - no string conversions (Gemini tip #1).
 func SplitByBoundary(input []byte, minChunkSize int) []Chunk {
@@ -64,17 +70,23 @@ func SplitByBoundary(input []byte, minChunkSize int) []Chunk {
 		pos += splitPoint
 		chunkIndex++
 
-		// Skip leading whitespace for next chunk
-		for pos < len(input) && isWhitespace(input[pos]) {
-			pos++
-		}
+		// NOTE: We do NOT skip leading whitespace anymore.
+		// Whitespace should stay with the following word for proper BPE merging.
+		// " This" is a single token — splitting it into " " + "This" breaks merges.
 	}
 
 	return chunks
 }
 
 // findBoundaryAfter finds the first boundary character at or after minPos.
-// If no boundary is found, returns the end of the slice.
+// Returns the position to split AT (exclusive end of current chunk).
+//
+// For whitespace: split BEFORE the whitespace (don't include it)
+// For punctuation: split AFTER the punctuation (include it)
+//
+// This ensures:
+//   - "test." stays together in current chunk
+//   - " This" stays together in next chunk (space + word = often single token)
 func findBoundaryAfter(data []byte, minPos int) int {
 	// Start searching from minPos
 	searchStart := minPos
@@ -84,9 +96,17 @@ func findBoundaryAfter(data []byte, minPos int) int {
 
 	// Look for boundary in remaining portion
 	for i := searchStart; i < len(data); i++ {
-		if isBoundary(data[i]) {
-			// Include the boundary character in this chunk
-			return i + 1
+		b := data[i]
+		if isBoundary(b) {
+			if isWhitespaceChar(b) {
+				// Whitespace: split BEFORE it (don't include in current chunk)
+				// This keeps " word" together in the next chunk
+				return i
+			} else {
+				// Punctuation: split AFTER it (include in current chunk)
+				// This keeps "word." together
+				return i + 1
+			}
 		}
 	}
 
@@ -116,7 +136,7 @@ func SplitByWhitespace(input []byte, minChunkSize int) []Chunk {
 	}
 
 	chunks := make([]Chunk, 0, len(input)/minChunkSize+1)
-	
+
 	var currentChunk []byte
 	currentOffset := 0
 	chunkIndex := 0
@@ -131,13 +151,15 @@ func SplitByWhitespace(input []byte, minChunkSize int) []Chunk {
 		fieldPos += pos
 
 		if currentChunk == nil {
-			currentOffset = fieldPos
+			// Start new chunk - include any leading whitespace
+			currentOffset = pos // Start from current pos, not field pos
+			// Include whitespace before field
+			currentChunk = append(currentChunk, input[pos:fieldPos]...)
+		} else if fieldPos > pos {
+			// Add whitespace between fields
+			currentChunk = append(currentChunk, input[pos:fieldPos]...)
 		}
 
-		// Add field to current chunk (with space if not first)
-		if len(currentChunk) > 0 {
-			currentChunk = append(currentChunk, ' ')
-		}
 		currentChunk = append(currentChunk, field...)
 		pos = fieldPos + len(field)
 
@@ -192,6 +214,10 @@ func SplitFixedWithBoundary(input []byte, numChunks int) []Chunk {
 
 func isBoundary(b byte) bool {
 	return bytes.IndexByte(boundaryChars, b) >= 0
+}
+
+func isWhitespaceChar(b byte) bool {
+	return bytes.IndexByte(whitespaceChars, b) >= 0
 }
 
 func isWhitespace(b byte) bool {

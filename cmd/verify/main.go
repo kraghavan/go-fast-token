@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== go-fast-token Verification Suite ===\n")
+	fmt.Println("=== go-fast-token Verification Suite ===")
 
 	// Test texts of varying complexity
 	testCases := []struct {
